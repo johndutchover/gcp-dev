@@ -4,3 +4,4 @@ venv/
 __pycache__/
 .pulumi/
 Pulumi.*.yaml
+stack_state.json
