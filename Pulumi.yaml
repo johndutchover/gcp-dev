@@ -1,0 +1,7 @@
+name: gcp-dev
+runtime:
+  name: python
+  options:
+    virtualenv: venv
+description: Dev space
+config:
