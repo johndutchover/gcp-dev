@@ -6,3 +6,5 @@ __pycache__/
 Pulumi.*.yaml
 /bin/
 stack_state.json
+kubeconfig.yaml
+gke_gcloud_auth_plugin_cache
