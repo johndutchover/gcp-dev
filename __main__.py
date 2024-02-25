@@ -1,7 +1,12 @@
 import pulumi
 from pulumi import Config, export, get_project, get_stack, Output, ResourceOptions
 from pulumi_gcp.config import project, zone
-from pulumi_gcp.container import Cluster, ClusterNodeConfigArgs
+from pulumi_gcp.container import (
+    Cluster,
+    ClusterNodeConfigArgs,
+    ClusterMasterAuthorizedNetworksConfigArgs,
+    ClusterMasterAuthorizedNetworksConfigCidrBlockArgs,
+)
 from pulumi_kubernetes import Provider
 from pulumi_kubernetes.apps.v1 import Deployment, DeploymentSpecArgs
 from pulumi_kubernetes.core.v1 import (
@@ -23,6 +28,12 @@ myValue = config.require("myEnvironment")
 # Export the value as an output
 pulumi.export("environment", myValue)
 
+# Define the CIDR blocks
+authorized_networks = {
+    "ny_office_south": config.get("ny_office_south"),
+    "ny_office_north": config.get("ny_office_north"),
+}
+
 # nodeCount is the number of cluster nodes to provision. Defaults to 3 if unspecified.
 NODE_COUNT = config.get_int("node_count") or 3
 # nodeMachineType is the machine type to use for cluster nodes. Defaults to n1-standard-1 if unspecified.
@@ -31,9 +42,20 @@ NODE_MACHINE_TYPE = config.get("node_machine_type") or "e2-medium"
 # username is the admin username for the cluster.
 USERNAME = config.get("username") or "admin"
 # password is the password for the admin user in the cluster.
-PASSWORD = config.get_secret('clusterAdminPwd')
+PASSWORD = config.get_secret("clusterAdminPwd")
 # master version of GKE engine
-MASTER_VERSION = config.get('master_version')
+MASTER_VERSION = config.get("master_version")
+
+# Define the master authorized networks config
+master_authorized_networks_config = ClusterMasterAuthorizedNetworksConfigArgs(
+    cidr_blocks=[
+        ClusterMasterAuthorizedNetworksConfigCidrBlockArgs(
+            cidr_block=cidr,
+            display_name=name,
+        )
+        for name, cidr in authorized_networks.items()
+    ],
+)
 
 # Now, actually create the GKE cluster.
 k8s_cluster = Cluster(
@@ -41,6 +63,7 @@ k8s_cluster = Cluster(
     initial_node_count=NODE_COUNT,
     node_version=MASTER_VERSION,
     min_master_version=MASTER_VERSION,
+    master_authorized_networks_config=master_authorized_networks_config,
     node_config=ClusterNodeConfigArgs(
         machine_type=NODE_MACHINE_TYPE,
         oauth_scopes=[
