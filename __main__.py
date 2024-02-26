@@ -1,4 +1,5 @@
 import pulumi
+import pulumi_kubernetes as k8s
 from pulumi import Config, export, get_project, get_stack, Output, ResourceOptions
 from pulumi_gcp.config import project, zone
 from pulumi_gcp.container import (
@@ -11,6 +12,7 @@ from pulumi_kubernetes import Provider
 from pulumi_kubernetes.apps.v1 import Deployment, DeploymentSpecArgs
 from pulumi_kubernetes.core.v1 import (
     ContainerArgs,
+    ContainerPortArgs,
     PodSpecArgs,
     PodTemplateSpecArgs,
     Service,
@@ -107,6 +109,35 @@ users:
         info[1],
         "{0}_{1}_{2}".format(project, zone, info[0]),
     )
+)
+
+# Provide the name of your application
+app_name = "hello-world"
+
+# Define a Kubernetes Deployment
+deployment = k8s.apps.v1.Deployment(
+    app_name,
+    metadata=k8s.meta.v1.ObjectMetaArgs(
+        name=app_name,
+    ),
+    spec=k8s.apps.v1.DeploymentSpecArgs(
+        replicas=1,
+        selector=k8s.meta.v1.LabelSelectorArgs(match_labels={"app": app_name}),
+        template=k8s.core.v1.PodTemplateSpecArgs(
+            metadata=k8s.meta.v1.ObjectMetaArgs(
+                labels={"app": app_name},
+            ),
+            spec=k8s.core.v1.PodSpecArgs(
+                containers=[
+                    k8s.core.v1.ContainerArgs(
+                        name=app_name,
+                        image="us-docker.pkg.dev/google-samples/containers/gke/hello-app:1.0",
+                        ports=[k8s.core.v1.ContainerPortArgs(container_port=8080)],
+                    ),
+                ],
+            ),
+        ),
+    ),
 )
 
 # Make a Kubernetes provider instance that uses our cluster from above.
