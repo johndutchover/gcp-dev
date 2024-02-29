@@ -1,5 +1,6 @@
 import pulumi
 import pulumi_kubernetes as k8s
+import pulumi_gcp as gcp
 from pulumi import Config, export, get_project, get_stack, Output, ResourceOptions
 from pulumi_gcp.config import project, zone
 from pulumi_gcp.container import (
@@ -7,6 +8,7 @@ from pulumi_gcp.container import (
     ClusterNodeConfigArgs,
     ClusterMasterAuthorizedNetworksConfigArgs,
     ClusterMasterAuthorizedNetworksConfigCidrBlockArgs,
+    NodePool
 )
 from pulumi_kubernetes import Provider
 from pulumi_kubernetes.apps.v1 import Deployment, DeploymentSpecArgs
@@ -32,12 +34,11 @@ pulumi.export("environment", myValue)
 
 # Define the CIDR blocks
 authorized_networks = {
-    "ny_office_south": config.get("ny_office_south"),
     "ny_office_north": config.get("ny_office_north"),
 }
 
 # nodeCount is the number of cluster nodes to provision. Defaults to 3 if unspecified.
-NODE_COUNT = config.get_int("node_count") or 3
+NODE_COUNT = config.get_int("node_count") or 2
 # nodeMachineType is the machine type to use for cluster nodes. Defaults to n1-standard-1 if unspecified.
 # See https://cloud.google.com/compute/docs/machine-types for more details on available machine types.
 NODE_MACHINE_TYPE = config.get("node_machine_type") or "e2-medium"
@@ -76,6 +77,32 @@ k8s_cluster = Cluster(
         ],
     ),
 )
+
+default = gcp.serviceaccount.Account("default",
+    account_id="service-account-id",
+    display_name="Service Account")
+primary = gcp.container.Cluster("primary",
+    name="my-gke-cluster",
+    location="us-central1",
+    remove_default_node_pool=True,
+    initial_node_count=1)
+primary_preemptible_nodes = gcp.container.NodePool("primary_preemptible_nodes",
+    name="my-node-pool",
+    cluster=primary.id,
+    node_count=1,
+    node_config=gcp.container.NodePoolNodeConfigArgs(
+        preemptible=True,
+        machine_type="e2-medium",
+        service_account=default.email,
+        oauth_scopes=["https://www.googleapis.com/auth/cloud-platform"],
+    ))
+
+# Export the cluster's endpoint.
+export("endpoint", k8s_cluster.endpoint)
+
+# Export the cluster's CA certificate.
+export("ca_certificate", k8s_cluster.master_auth.cluster_ca_certificate)
+
 
 # Manufacture a GKE-style Kubeconfig. Note that this is slightly "different" because of the way GKE requires
 # gcloud to be in the picture for cluster authentication (rather than using the client cert/key directly).
