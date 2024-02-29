@@ -8,7 +8,7 @@ from pulumi_gcp.container import (
     ClusterNodeConfigArgs,
     ClusterMasterAuthorizedNetworksConfigArgs,
     ClusterMasterAuthorizedNetworksConfigCidrBlockArgs,
-    NodePool
+    NodePool,
 )
 from pulumi_kubernetes import Provider
 from pulumi_kubernetes.apps.v1 import Deployment, DeploymentSpecArgs
@@ -60,53 +60,40 @@ master_authorized_networks_config = ClusterMasterAuthorizedNetworksConfigArgs(
     ],
 )
 
-# Now, actually create the GKE cluster.
-k8s_cluster = Cluster(
-    "gke-cluster",
-    initial_node_count=NODE_COUNT,
-    node_version=MASTER_VERSION,
-    min_master_version=MASTER_VERSION,
-    master_authorized_networks_config=master_authorized_networks_config,
-    node_config=ClusterNodeConfigArgs(
-        machine_type=NODE_MACHINE_TYPE,
-        oauth_scopes=[
-            "https://www.googleapis.com/auth/compute",
-            "https://www.googleapis.com/auth/devstorage.read_only",
-            "https://www.googleapis.com/auth/logging.write",
-            "https://www.googleapis.com/auth/monitoring",
-        ],
-    ),
+default = gcp.serviceaccount.Account(
+    "default", account_id="service-account-id", display_name="Service Account"
 )
-
-default = gcp.serviceaccount.Account("default",
-    account_id="service-account-id",
-    display_name="Service Account")
-primary = gcp.container.Cluster("primary",
-    name="gke-cluster-1",
+primary = gcp.container.Cluster(
+    "primary",
+    deletion_protection=False,
+    name="primary-cluster",
     location=zone,
     remove_default_node_pool=True,
-    initial_node_count=1)
-primary_preemptible_nodes = gcp.container.NodePool("primary_preemptible_nodes",
+    initial_node_count=NODE_COUNT,
+)
+primary_preemptible_nodes = gcp.container.NodePool(
+    "primary_preemptible_nodes",
     name="my-node-pool",
     cluster=primary.id,
-    node_count=1,
+    node_count=NODE_COUNT,
     node_config=gcp.container.NodePoolNodeConfigArgs(
         preemptible=True,
         machine_type=NODE_MACHINE_TYPE,
         service_account=default.email,
         oauth_scopes=["https://www.googleapis.com/auth/cloud-platform"],
-    ))
+    ),
+)
 
 # Export the cluster's endpoint.
-export("endpoint", k8s_cluster.endpoint)
+export("endpoint", primary.endpoint)
 
 # Export the cluster's CA certificate.
-export("ca_certificate", k8s_cluster.master_auth.cluster_ca_certificate)
+export("ca_certificate", primary.master_auth.cluster_ca_certificate)
 
 
 # Manufacture a GKE-style Kubeconfig. Note that this is slightly "different" because of the way GKE requires
 # gcloud to be in the picture for cluster authentication (rather than using the client cert/key directly).
-k8s_info = Output.all(k8s_cluster.name, k8s_cluster.endpoint, k8s_cluster.master_auth)
+k8s_info = Output.all(primary.name, primary.endpoint, primary.master_auth)
 k8s_config = k8s_info.apply(
     lambda info: """apiVersion: v1
 clusters:
@@ -138,34 +125,34 @@ users:
     )
 )
 
-# Provide the name of your application
-app_name = "hello-world"
-
-# Define a Kubernetes Deployment
-deployment = k8s.apps.v1.Deployment(
-    app_name,
-    metadata=k8s.meta.v1.ObjectMetaArgs(
-        name=app_name,
-    ),
-    spec=k8s.apps.v1.DeploymentSpecArgs(
-        replicas=1,
-        selector=k8s.meta.v1.LabelSelectorArgs(match_labels={"app": app_name}),
-        template=k8s.core.v1.PodTemplateSpecArgs(
-            metadata=k8s.meta.v1.ObjectMetaArgs(
-                labels={"app": app_name},
-            ),
-            spec=k8s.core.v1.PodSpecArgs(
-                containers=[
-                    k8s.core.v1.ContainerArgs(
-                        name=app_name,
-                        image="us-docker.pkg.dev/google-samples/containers/gke/hello-app:1.0",
-                        ports=[k8s.core.v1.ContainerPortArgs(container_port=8080)],
-                    ),
-                ],
-            ),
-        ),
-    ),
-)
+# # Provide the name of your application
+# app_name = "hello-world"
+#
+# # Define a Kubernetes Deployment
+# deployment = k8s.apps.v1.Deployment(
+#     app_name,
+#     metadata=k8s.meta.v1.ObjectMetaArgs(
+#         name=app_name,
+#     ),
+#     spec=k8s.apps.v1.DeploymentSpecArgs(
+#         replicas=1,
+#         selector=k8s.meta.v1.LabelSelectorArgs(match_labels={"app": app_name}),
+#         template=k8s.core.v1.PodTemplateSpecArgs(
+#             metadata=k8s.meta.v1.ObjectMetaArgs(
+#                 labels={"app": app_name},
+#             ),
+#             spec=k8s.core.v1.PodSpecArgs(
+#                 containers=[
+#                     k8s.core.v1.ContainerArgs(
+#                         name=app_name,
+#                         image="us-docker.pkg.dev/google-samples/containers/gke/hello-app:1.0",
+#                         ports=[k8s.core.v1.ContainerPortArgs(container_port=8080)],
+#                     ),
+#                 ],
+#             ),
+#         ),
+#     ),
+# )
 
 # Make a Kubernetes provider instance that uses our cluster from above.
 k8s_provider = Provider("gke_k8s", kubeconfig=k8s_config)
