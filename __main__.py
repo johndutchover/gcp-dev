@@ -99,11 +99,18 @@ namespace = k8s.core.v1.Namespace(
 # Deploy Crossplane using the Helm chart
 crossplane_chart = k8s.helm.v3.Chart(
     "crossplane",
-    config.k8s_helm_repo_url,
-    version=config.k8s_helm_chart_version,
-    namespace=namespace.metadata.name,
-    opts=ResourceOptions(depends_on=[namespace]),
+    config.get("k8s_helm_repo_url"),
+    opts=k8s.helm.v3.ChartOpts(
+        chart=config.get("k8s_helm_chart_name"),
+        version=config.get("k8s_helm_chart_version"),
+        namespace=namespace.metadata.name,
+        fetch_opts=k8s.helm.v3.FetchOpts(
+            repo=config.get("k8s_helm_repo_url"),
+            version=config.get("k8s_helm_chart_version"),
+        ),
+    ),
 )
+
 
 # Export the required resources
 pulumi.export("namespace", namespace.metadata.name)
