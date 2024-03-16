@@ -1,7 +1,14 @@
 import pulumi
 import pulumi_kubernetes as k8s
 import pulumi_gcp as gcp
-from pulumi import Config, export, get_project, get_stack, Output, ResourceOptions
+from pulumi import (
+    Config,
+    export,
+    get_project,
+    get_stack,
+    Output,
+    ResourceOptions,
+)
 from pulumi_gcp.config import project, zone
 from pulumi_gcp.container import (
     Cluster,
@@ -63,14 +70,46 @@ master_authorized_networks_config = ClusterMasterAuthorizedNetworksConfigArgs(
 default = gcp.serviceaccount.Account(
     "default", account_id="service-account-id", display_name="Service Account"
 )
-primary = gcp.container.Cluster(
-    "primary",
-    deletion_protection=False,
-    name="primary-cluster",
-    location=zone,
-    remove_default_node_pool=True,
-    initial_node_count=NODE_COUNT,
-)
+
+# Try to retrieve an existing cluster; if not found, create a new one
+try:
+    existing_cluster = gcp.container.get_cluster(name="primary-cluster", location=zone)
+except Exception as e:
+    if "not found" in str(e):
+        pulumi.log.info("Cluster not found, creating a new one.")
+        primary = gcp.container.Cluster(
+            "primary",
+            deletion_protection=False,
+            name="primary-cluster",
+            location=zone,
+            remove_default_node_pool=True,
+            initial_node_count=NODE_COUNT,
+        )
+        pulumi.export(
+            "kubeconfig",
+            primary.name.apply(lambda name: gcp.container.get_kubeconfig(name, zone)),
+        )
+    else:
+        pulumi.log.error(f"Error retrieving cluster: {e}")
+        raise e  # Re-raise the exception for further handling if needed
+else:
+    pulumi.export("existing_cluster_name", existing_cluster.name)
+    pulumi.export(
+        "kubeconfig",
+        existing_cluster.name.apply(
+            lambda name: gcp.container.get_kubeconfig(name, zone)
+        ),
+    )
+
+# In case of an existing cluster, you may want to export its properties.
+# For instance, the `kubeconfig` can be obtained similarly to the new cluster creation case.
+if "existing_cluster" in locals():
+    pulumi.export("existing_cluster_name", existing_cluster.name)
+    pulumi.export(
+        "kubeconfig",
+        existing_cluster.name.apply(lambda name: container.get_kubeconfig(name, zone)),
+    )
+
 primary_preemptible_nodes = gcp.container.NodePool(
     "primary_preemptible_nodes",
     name="my-node-pool",
@@ -125,37 +164,39 @@ users:
     )
 )
 
-# # Provide the name of your application
-# app_name = "hello-world"
-#
-# # Define a Kubernetes Deployment
-# deployment = k8s.apps.v1.Deployment(
-#     app_name,
-#     metadata=k8s.meta.v1.ObjectMetaArgs(
-#         name=app_name,
-#     ),
-#     spec=k8s.apps.v1.DeploymentSpecArgs(
-#         replicas=1,
-#         selector=k8s.meta.v1.LabelSelectorArgs(match_labels={"app": app_name}),
-#         template=k8s.core.v1.PodTemplateSpecArgs(
-#             metadata=k8s.meta.v1.ObjectMetaArgs(
-#                 labels={"app": app_name},
-#             ),
-#             spec=k8s.core.v1.PodSpecArgs(
-#                 containers=[
-#                     k8s.core.v1.ContainerArgs(
-#                         name=app_name,
-#                         image="us-docker.pkg.dev/google-samples/containers/gke/hello-app:1.0",
-#                         ports=[k8s.core.v1.ContainerPortArgs(container_port=8080)],
-#                     ),
-#                 ],
-#             ),
-#         ),
-#     ),
-# )
-
 # Make a Kubernetes provider instance that uses our cluster from above.
 k8s_provider = Provider("gke_k8s", kubeconfig=k8s_config)
+
+# Create a Kubernetes Namespace if it doesn't exist
+namespace = k8s.core.v1.Namespace(
+    "crossplane-system-ns",
+    metadata=k8s.meta.v1.ObjectMetaArgs(
+        name="crossplane-system",
+    ),
+    opts=pulumi.ResourceOptions(
+        depends_on=[primary]
+    ),  # Ensure namespace is created before deploying the chart
+)
+
+# Deploy Crossplane using the Helm chart
+crossplane_chart = k8s.helm.v3.Chart(
+    "crossplane",
+    k8s.helm.v3.ChartOpts(
+        chart="crossplane",
+        version="1.6.1",  # Specify the version of Crossplane you want to install
+        namespace=namespace.metadata.name,
+        fetch_opts=k8s.helm.v3.FetchOpts(
+            repo="https://charts.crossplane.io/stable",  # Crossplane Helm repository
+        ),
+    ),
+    opts=pulumi.ResourceOptions(
+        depends_on=[namespace]
+    ),  # Ensure namespace is created before deploying the chart
+)
+
+# Export the required resources
+pulumi.export("namespace", namespace.metadata.name)
+pulumi.export("crossplane_chart", crossplane_chart._name)
 
 # Create a canary deployment to test that this cluster works.
 labels = {"app": "canary-{0}-{1}".format(get_project(), get_stack())}
