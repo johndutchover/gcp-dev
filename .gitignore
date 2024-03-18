@@ -7,4 +7,6 @@ Pulumi.*.yaml
 /bin/
 stack_state.json
 kubeconfig.yaml
+kubeconfig
 gke_gcloud_auth_plugin_cache
+credentials.json

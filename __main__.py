@@ -9,6 +9,7 @@ from pulumi_gcp.container import (
     ClusterMasterAuthorizedNetworksConfigCidrBlockArgs,
     NodePool,
 )
+from pulumi_kubernetes.helm.v3 import ChartOpts, FetchOpts
 
 # Import the configuration values
 config = pulumi.Config()
@@ -21,7 +22,7 @@ pulumi.export("environment", my_value)
 
 # Define the CIDR blocks
 authorized_networks = {
-    "ny_office_north": config.get("ny_office_north"),
+    "ny_office": config.get("ny_office"),
 }
 
 # Define constants
@@ -30,6 +31,12 @@ NODE_MACHINE_TYPE = config.get("node_machine_type") or "e2-medium"
 USERNAME = config.get("username") or "admin"
 PASSWORD = config.get_secret("clusterAdminPwd")
 MASTER_VERSION = config.get("master_version")
+NAMESPACE_NAME = config.get("namespace_name") or "default"
+CHART_NAME = config.get("chart_name") or "crossplane"
+CHART_VERSION = config.get("chart_version") or "1.15.1"
+CROSSPLANE_HELM_REPO_URL = (
+    config.get("k8s_helm_repo_url") or "https://charts.crossplane.io"
+)
 
 # Define the master authorized networks config
 master_authorized_networks_config = ClusterMasterAuthorizedNetworksConfigArgs(
@@ -80,41 +87,13 @@ primary_node_pool = NodePool(
     ),
 )
 
-# Export the cluster's endpoint.
-export("endpoint", primary_cluster.endpoint)
+# Fetch the kubeconfig for the cluster
+kubeconfig = primary_cluster.master_auth.cluster_ca_certificate
 
-# Export the cluster's CA certificate.
-export("ca_certificate", primary_cluster.master_auth.cluster_ca_certificate)
-
-# Define the Kubernetes provider using the cluster's kubeconfig
-k8s_provider = k8s.Provider("gke_k8s", kubeconfig=primary_cluster.node_config)
-
-# Define the Kubernetes namespace
-namespace = k8s.core.v1.Namespace(
-    "crossplane-system-ns",
-    metadata=k8s.meta.v1.ObjectMetaArgs(name="crossplane-system"),
-    opts=ResourceOptions(depends_on=[primary_cluster]),
+# Create the Kubernetes provider using the cluster's kubeconfig
+k8s_provider = k8s.Provider(
+    "gke_k8s", kubeconfig=primary_cluster.master_auth.cluster_ca_certificate
 )
-
-# Deploy Crossplane using the Helm chart
-crossplane_chart = k8s.helm.v3.Chart(
-    "crossplane",
-    config.get("k8s_helm_repo_url"),
-    opts=k8s.helm.v3.ChartOpts(
-        chart=config.get("k8s_helm_chart_name"),
-        version=config.get("k8s_helm_chart_version"),
-        namespace=namespace.metadata.name,
-        fetch_opts=k8s.helm.v3.FetchOpts(
-            repo=config.get("k8s_helm_repo_url"),
-            version=config.get("k8s_helm_chart_version"),
-        ),
-    ),
-)
-
-
-# Export the required resources
-pulumi.export("namespace", namespace.metadata.name)
-pulumi.export("crossplane_chart", crossplane_chart.name)
 
 # Define the canary deployment
 canary = k8s.apps.v1.Deployment(
@@ -143,9 +122,17 @@ ingress = k8s.core.v1.Service(
     opts=ResourceOptions(provider=k8s_provider),
 )
 
-# Export the kubeconfig and ingress IP
-export("kubeconfig", primary_cluster.kube_config)
-export(
+# Export the kubeconfig for the cluster
+pulumi.export("kubeconfig", primary_cluster.node_config)
+
+# Export the ingress ip
+pulumi.export(
     "ingress_ip",
     ingress.status.apply(lambda status: status.load_balancer.ingress[0].ip),
 )
+
+# Export the cluster's endpoint.
+export("endpoint", primary_cluster.endpoint)
+
+# Export the cluster's CA certificate.
+export("ca_certificate", primary_cluster.master_auth.cluster_ca_certificate)
