@@ -10,20 +10,10 @@ from pulumi_gcp.container import (
     NodePool,
 )
 from pulumi_kubernetes.helm.v3 import ChartOpts, FetchOpts
+from pulumi_kubernetes import Provider
 
 # Import the configuration values
 config = pulumi.Config()
-
-# Retrieve the value of "myEnvironment"
-my_value = config.require("myEnvironment")
-
-# Export the value as an output
-pulumi.export("environment", my_value)
-
-# Define the CIDR blocks
-authorized_networks = {
-    "ny_office": config.get("ny_office"),
-}
 
 # Define constants
 NODE_COUNT = config.get_int("node_count") or 2
@@ -37,6 +27,17 @@ CHART_VERSION = config.get("chart_version") or "1.15.1"
 CROSSPLANE_HELM_REPO_URL = (
     config.get("k8s_helm_repo_url") or "https://charts.crossplane.io"
 )
+
+# Retrieve the value of "myEnvironment"
+my_value = config.require("myEnvironment")
+
+# Export the value as an output
+pulumi.export("environment", my_value)
+
+# Define the CIDR blocks
+authorized_networks = {
+    "ny_office": config.get("ny_office"),
+}
 
 # Define the master authorized networks config
 master_authorized_networks_config = ClusterMasterAuthorizedNetworksConfigArgs(
@@ -67,13 +68,6 @@ primary_cluster = Cluster(
     deletion_protection=False,
 )
 
-# Export cluster information
-pulumi.export("cluster_name", primary_cluster.name)
-pulumi.export("cluster_endpoint", primary_cluster.endpoint)
-pulumi.export(
-    "cluster_ca_certificate", primary_cluster.master_auth.cluster_ca_certificate
-)
-
 # Create or retrieve the GCP node pool
 primary_node_pool = NodePool(
     "primary-node-pool",
@@ -87,13 +81,45 @@ primary_node_pool = NodePool(
     ),
 )
 
-# Fetch the kubeconfig for the cluster
-kubeconfig = primary_cluster.master_auth.cluster_ca_certificate
-
-# Create the Kubernetes provider using the cluster's kubeconfig
-k8s_provider = k8s.Provider(
-    "gke_k8s", kubeconfig=primary_cluster.master_auth.cluster_ca_certificate
+# Manufacture a GKE-style Kubeconfig. Note that this is slightly "different" because of the way GKE requires
+# gcloud to be in the picture for cluster authentication (rather than using the client cert/key directly).
+k8s_info = Output.all(
+    primary_cluster.name, primary_cluster.endpoint, primary_cluster.master_auth
 )
+
+k8s_config = k8s_info.apply(
+    lambda info: """apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority-data: {0}
+    server: https://{1}
+  name: {2}
+contexts:
+- context:
+    cluster: {2}
+    user: {2}
+  name: {2}
+current-context: {2}
+kind: Config
+preferences: {{}}
+users:
+- name: {2}
+  user:
+    exec:
+      apiVersion: client.authentication.k8s.io/v1beta1
+      command: gke-gcloud-auth-plugin
+      installHint: Install gke-gcloud-auth-plugin for use with kubectl by following
+        https://cloud.google.com/blog/products/containers-kubernetes/kubectl-auth-changes-in-gke
+      provideClusterInfo: true
+""".format(
+        info[2]["cluster_ca_certificate"],
+        info[1],
+        "{0}_{1}_{2}".format(project, zone, info[0]),
+    )
+)
+
+# Make a Kubernetes provider instance that uses our cluster from above.
+k8s_provider = Provider("gke_k8s", kubeconfig=k8s_config)
 
 # Define the canary deployment
 canary = k8s.apps.v1.Deployment(
@@ -129,6 +155,13 @@ pulumi.export("kubeconfig", primary_cluster.node_config)
 pulumi.export(
     "ingress_ip",
     ingress.status.apply(lambda status: status.load_balancer.ingress[0].ip),
+)
+
+# Export cluster information
+pulumi.export("cluster_name", primary_cluster.name)
+pulumi.export("cluster_endpoint", primary_cluster.endpoint)
+pulumi.export(
+    "cluster_ca_certificate", primary_cluster.master_auth.cluster_ca_certificate
 )
 
 # Export the cluster's endpoint.
