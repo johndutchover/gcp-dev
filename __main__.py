@@ -148,6 +148,17 @@ ingress = k8s.core.v1.Service(
     opts=ResourceOptions(provider=k8s_provider),
 )
 
+# Deploy the Helm chart
+crossplane_chart = k8s.helm.v3.Chart(
+    "crossplane",
+    k8s.helm.v3.ChartOpts(
+        chart=CHART_NAME,
+        version=CHART_VERSION,
+        namespace=NAMESPACE_NAME,
+        fetch_opts=FetchOpts(repo=CROSSPLANE_HELM_REPO_URL),
+    ),
+)
+
 # Export the kubeconfig for the cluster
 pulumi.export("kubeconfig", primary_cluster.node_config)
 
